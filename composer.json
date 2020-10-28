@@ -1,0 +1,20 @@
+{
+    "name": "dr-benton/udp-http-bridge-php",
+    "type": "project",
+    "authors": [
+        {
+            "name": "Olivier Philippon",
+            "email": "olivier@connectedenergy.net"
+        }
+    ],
+    "require": {
+        "php": "^7.4",
+        "ext-json": "*",
+        "react/datagram": "^1.5",
+        "react/http": "^1.1",
+        "monolog/monolog": "^2.1"
+    },
+    "require-dev": {
+        "vlucas/phpdotenv": "^5.2"
+    }
+}
