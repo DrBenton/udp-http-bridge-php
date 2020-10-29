@@ -1,11 +1,17 @@
 <?php
 
 require_once "./vendor/autoload.php";
-require_once "./UdpToHttpForwarder.php";
 
+use App\Config;
+use App\Datadog\Config as DatadogConfig;
+use App\Datadog\Logger as DatadogLogger;
+use App\UdpToHttpForwarder;
 use Dotenv\Dotenv;
 use Monolog\Handler\StreamHandler;
 use Monolog\Logger;
+use React\Datagram\Factory as UdpFactory;
+use React\EventLoop\Factory as LoopFactory;
+use React\Http\Browser;
 
 if (class_exists(Dotenv::class)) {
     // Load the ".env" file, if it exists:
@@ -13,34 +19,48 @@ if (class_exists(Dotenv::class)) {
     $dotenv->load();
 }
 
-// Check some mandatory env vars:
-$httpForwardingServerUrl = $_ENV["HTTP_FORWARDING_URL"] ?? null;
-if (!$httpForwardingServerUrl) {
-    die("[FATAL] Missing mandatory env var 'HTTP_FORWARDING_URL'");
-}
+// Check some mandatory env vars, and init a Config value object:
 $udpServerAddress = $_ENV["UDP_SERVER_ADDRESS"] ?? null;
 if (!$udpServerAddress) {
     die("[FATAL] Missing mandatory env var 'UDP_SERVER_ADDRESS'");
 }
-// Also assign some optional ones:
-$httpForwardingBearerToken = $_ENV["HTTP_FORWARDING_BEARER_TOKEN"] ?? null;
+$httpForwardingServerUrl = $_ENV["HTTP_FORWARDING_URL"] ?? null;
+if (!$httpForwardingServerUrl) {
+    die("[FATAL] Missing mandatory env var 'HTTP_FORWARDING_URL'");
+}
+$config = new Config($udpServerAddress, $httpForwardingServerUrl);
+
+// Also assign some optional config settings:
+$config->httpForwardingBearerToken = $_ENV["HTTP_FORWARDING_BEARER_TOKEN"] ?? null;
+$datadogApiToken = $_ENV["DATADOG_API_TOKEN"] ?? null;
 
 
 // Ok. let's set this up...
-$loop = React\EventLoop\Factory::create();
+$loop = LoopFactory::create();
+$udpFactory = new UdpFactory($loop);
+$httpClient = new Browser($loop);
 
-$logger = new Logger("udp_forwarder");
-$logger->pushHandler(new StreamHandler(STDOUT));
+$logHandler = new StreamHandler(STDOUT);
 
-$forwarder = new UdpToHttpForwarder($loop);
-$forwarder->logger = $logger;
-$httpForwardingHeaders = $httpForwardingBearerToken
-    ? ["Authentication" => "Bearer ${_ENV['HTTP_FORWARDING_BEARER_TOKEN']}"]
-    : [];
-$forwarder->setHttpForwarding($httpForwardingServerUrl, $httpForwardingHeaders);
-$forwarder->startUdpServer($udpServerAddress);
+$forwarder = new UdpToHttpForwarder($config, $udpFactory, $httpClient);
+$forwarderLogger = new Logger("udp_forwarder");
+$forwarderLogger->pushHandler($logHandler);
+$forwarder->logger = $forwarderLogger;
 
-// ...And start the React PHP loop!
+// Integrated Datadog logging?
+if ($datadogApiToken) {
+    $datadogConfig = new DatadogConfig($datadogApiToken);
+    $datadogLogger = new DatadogLogger($datadogConfig, $httpClient);
+
+    $datadogLoggerLogger = new Logger("datadog_logger");// a logger for the Datadog logger, so meta! ^_^
+    $datadogLoggerLogger->pushHandler($logHandler);
+    $datadogLogger->logger = $datadogLoggerLogger;
+
+    $forwarder->datadogLogger = $datadogLogger;
+}
+
+// ...And start that thing!
+$forwarder->startUdpServer();
 $loop->run();
 
 /*
